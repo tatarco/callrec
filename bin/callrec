@@ -1,0 +1,72 @@
+#!/bin/bash
+# callrec — record any call on this Mac (mic + system audio) and transcribe locally.
+# Works for Zoom, WhatsApp, Meet, phone-on-speaker — anything that makes sound.
+# ponytail: no daemon, no menu bar app. Two ffmpeg inputs, a pid file, whisper.cpp.
+set -euo pipefail
+
+DIR="${CALLREC_DIR:-$HOME/Calls}"
+MODEL="${CALLREC_MODEL:-$HOME/.cache/whisper/ggml-large-v3-turbo.bin}"
+PIDFILE="/tmp/callrec.pid"
+CURFILE="/tmp/callrec.current"
+PREVOUT="/tmp/callrec.prevout"
+CAPTURE_DEV="Call Capture"   # Multi-Output Device: speakers + BlackHole 2ch
+
+dev() { # dev <name-fragment> -> avfoundation audio index
+  ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
+    | awk '/audio devices/{a=1;next} /^\[.*\] \[/{if(a){print}}' \
+    | grep -i "$1" | head -1 | sed -E 's/.*\[([0-9]+)\].*/\1/'
+}
+
+case "${1:-}" in
+start)
+  [ -f "$PIDFILE" ] && { echo "already recording: $(cat "$CURFILE")"; exit 1; }
+  mkdir -p "$DIR"
+  # ponytail: system audio only reaches BlackHole if output is the Multi-Output Device.
+  # Switch for the duration of the call, restore on stop, so the volume keys work the
+  # other 23 hours of the day.
+  if command -v setout >/dev/null; then
+    setout > "$PREVOUT"
+    setout "$CAPTURE_DEV" >/dev/null || rm -f "$PREVOUT"
+  fi
+  MIC=$(dev "microphone" || true)
+  SYS=$(dev "blackhole" || true)
+  [ -z "$MIC" ] && { echo "no microphone found"; exit 1; }
+  OUT="$DIR/$(date +%Y-%m-%d_%H%M)${2:+-$2}.m4a"
+  if [ -n "$SYS" ]; then
+    # mic + system audio, mixed to one track
+    ffmpeg -nostdin -loglevel error \
+      -f avfoundation -i ":$MIC" -f avfoundation -i ":$SYS" \
+      -filter_complex "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0[a]" \
+      -map "[a]" -c:a aac -b:a 64k "$OUT" & echo $! > "$PIDFILE"
+  else
+    echo "warning: BlackHole not found — recording MIC ONLY (you, not them)." >&2
+    echo "  fix: brew install --cask blackhole-2ch, then make a Multi-Output Device." >&2
+    ffmpeg -nostdin -loglevel error -f avfoundation -i ":$MIC" \
+      -c:a aac -b:a 64k "$OUT" & echo $! > "$PIDFILE"
+  fi
+  echo "$OUT" > "$CURFILE"
+  echo "recording → $OUT"
+  ;;
+stop)
+  [ -f "$PIDFILE" ] || { echo "not recording"; exit 1; }
+  kill -INT "$(cat "$PIDFILE")" 2>/dev/null || true
+  wait "$(cat "$PIDFILE")" 2>/dev/null || true
+  OUT=$(cat "$CURFILE"); rm -f "$PIDFILE" "$CURFILE"
+  [ -f "$PREVOUT" ] && { setout "$(cat "$PREVOUT")" >/dev/null || true; rm -f "$PREVOUT"; }
+  echo "saved → $OUT"
+  exec "$0" transcribe "$OUT"
+  ;;
+transcribe)
+  AUDIO="${2:?usage: callrec transcribe <file>}"
+  WAV="${AUDIO%.*}.wav"
+  ffmpeg -nostdin -loglevel error -y -i "$AUDIO" -ar 16000 -ac 1 "$WAV"
+  # ponytail: auto language. Hebrew calls transcribe as Hebrew, English as English.
+  whisper-cli -m "$MODEL" -f "$WAV" -l auto -otxt -of "${AUDIO%.*}" >/dev/null
+  rm -f "$WAV"
+  echo "transcript → ${AUDIO%.*}.txt"
+  ;;
+*)
+  echo "usage: callrec start [label] | stop | transcribe <file>"
+  exit 1
+  ;;
+esac
