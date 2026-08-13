@@ -100,7 +100,7 @@ class App: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Record which call?"
-        alert.informativeText = "Project or client name. It becomes the filename and the deal slug."
+        alert.informativeText = "A short name for this recording. It becomes the filename."
         alert.addButton(withTitle: "Start recording")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
