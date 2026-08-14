@@ -1,14 +1,14 @@
 # callrec
 
-Record any call on your Mac - both sides - and transcribe it locally. No bot joins the
-meeting, no subscription, no upload.
+Record any call on your Mac or PC - both sides - and transcribe it locally. No bot joins
+the meeting, no subscription, no upload.
 
 It doesn't care what you're calling on. Zoom, Meet, Teams, WhatsApp, Slack, a phone on
 speaker, a YouTube video you want notes from. If it makes sound on this machine, it gets
 recorded.
 
 ```
-click the menu bar dot → name the call → talk → click again → transcript in ~/Calls
+click the dot → name the call → talk → click again → transcript in your Calls folder
 ```
 
 ## Why this exists
@@ -22,12 +22,16 @@ Your memory of a conversation is a reconstruction. A transcript is not. That mat
 an interview, a lecture, a call with a supplier, an appointment you want to remember
 correctly, or anything where someone's exact words are worth more than your summary of them.
 
-The primitives to do this locally have been sitting on your Mac the whole time. This is 350
-lines of glue over them.
+The primitives to do this locally have been sitting on your machine the whole time. This is
+glue over them - about 350 lines on macOS, about 250 on Windows.
 
 ## How it works
 
-Three pieces, each replaceable:
+The hard part is capturing *the other side*. Your microphone records you; the person you're
+talking to comes out of your speakers, and speakers are an output. The two operating systems
+disagree completely about whether you're allowed to read one.
+
+### macOS
 
 | Piece | Job |
 |---|---|
@@ -41,7 +45,38 @@ every call - and remembering to switch back, because the volume keys stop workin
 selected - is exactly the kind of thing you stop doing after a week. So `callrec` switches
 to it on `start` and switches back on `stop`.
 
+### Windows
+
+Windows never made that decision. [WASAPI loopback](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording)
+has let any program read the audio going to a render device since Vista, so there is no
+driver to install, no fake sound card, no Multi-Output Device, and nothing about your sound
+settings changes while you record. You keep hearing the call and the volume keys keep working.
+
+| Piece | Job |
+|---|---|
+| **`loopcap.exe`** | 70 lines of C# over [NAudio](https://github.com/naudio/NAudio) (MIT). Opens the default output device in loopback mode and the default input device normally, and writes one WAV each. Compiled at install time by the C# compiler that already ships in Windows - no SDK, no build tools. |
+| **ffmpeg** | Mixes the two WAVs to one AAC track after the call, and resamples for whisper. |
+| **whisper.cpp** | Same as macOS. CPU/BLAS by default; `-Cuda` at install pulls the cuBLAS build. |
+
+One trap worth knowing about, because it is invisible until you check a transcript against
+the clock: WASAPI loopback delivers *nothing at all* while the output device is idle. A quiet
+minute doesn't arrive as a minute of silence, it doesn't arrive - so everything after it
+lands a minute early against the mic track and the two sides drift apart. The
+[documented fix](https://github.com/naudio/NAudio/blob/main/Docs/WasapiLoopbackCapture.md) is
+to play silence through the device for the duration of the recording, which is what
+`loopcap.exe` does.
+
+What the two platforms do *not* share is the reason people usually cite for this being hard.
+The widely copy-pasted Windows answer is a DirectShow filter called `virtual-audio-capturer`.
+It works by the same WASAPI loopback underneath, but it's an unsigned COM DLL last worked on
+around 2015, with open reports of the device not being found at all and of EasyAntiCheat
+flagging it as malicious. For a tool whose entire point is not needing someone else's
+software, registering that system-wide would be a strange trade. Calling the API directly is
+less code anyway.
+
 ## Install
+
+**macOS**
 
 ```bash
 git clone https://github.com/tatarco/callrec.git && cd callrec && ./install.sh
@@ -51,13 +86,25 @@ Installs ffmpeg, whisper-cpp and BlackHole via Homebrew, downloads the whisper m
 (~1.6GB, once), creates the `Call Capture` Multi-Output Device via CoreAudio, and builds the
 menu bar app into `~/Applications`. Re-running is safe.
 
+**Windows** (PowerShell, no admin rights needed)
+
+```powershell
+git clone https://github.com/tatarco/callrec.git; cd callrec; .\install.ps1
+```
+
+Installs ffmpeg via winget, downloads NAudio (pinned and hash-checked) and whisper.cpp,
+compiles `loopcap.exe`, downloads the model, and puts `callrec` on your PATH with a CallRec
+shortcut in the Start menu. Everything lands in `%USERPROFILE%\.callrec` - uninstalling is
+deleting that folder. Add `-Cuda` if you have an NVIDIA card.
+
 ## Use
 
-**Menu bar** - `open ~/Applications/CallRec.app`. Click the dot, type who the call is with,
-talk. The icon turns into a red stop button with a running timer. Click it again: it stops,
-transcribes, and offers to reveal the transcript. Right-click for the folder and quit.
+**Menu bar / tray** - `open ~/Applications/CallRec.app` on macOS, or CallRec in the Start
+menu on Windows. Click the dot, type who the call is with, talk. The dot turns red with a
+running timer. Click it again: it stops, transcribes, and points you at the transcript.
+Right-click for the folder and quit.
 
-**Terminal** - same thing, scriptable:
+**Terminal** - same thing, scriptable. Identical verbs on both platforms:
 
 ```bash
 callrec start standup       # → ~/Calls/2026-08-13_2309-standup.m4a
@@ -65,7 +112,7 @@ callrec stop                # → stops, transcribes, prints the .txt path
 callrec transcribe file.m4a # → transcribe something you already have
 ```
 
-Both write to `~/Calls/`. Nothing else touches the file.
+Both write to `~/Calls/` (`%USERPROFILE%\Calls` on Windows). Nothing else touches the file.
 
 ## Feeding it to something else
 
@@ -88,21 +135,28 @@ notes, since the transcript is the only version that isn't already an interpreta
 - **Consent.** Recording laws vary and some are one-party, some all-party. Tell people
   you're recording. This tool makes it easy to be a good actor; it doesn't make it legal to
   be a bad one.
-- Volume keys don't work while recording (a Multi-Output Device limitation). Set the level
-  before you start.
 - Both sides land on one mixed mono track - good for transcription, not for editing. If you
-  want speakers separated, record two files instead of using `amix` and diarize after.
-- Bluetooth headphones: pick your headphones as the speaker half when you create the device
-  (`make-multi-output "<name>"`), or you'll capture silence.
-- Apple Silicon assumed (Metal). It'll run on Intel, slower.
+  want speakers separated, keep the two files instead of using `amix` and diarize after. On
+  Windows they are already two separate WAVs until `stop` merges them.
+- **macOS:** volume keys don't work while recording (a Multi-Output Device limitation). Set
+  the level before you start. Bluetooth headphones: pick your headphones as the speaker half
+  when you create the device (`make-multi-output "<name>"`), or you'll capture silence.
+  Apple Silicon assumed (Metal). It'll run on Intel, slower.
+- **Windows:** it records whatever is currently the *default* output and input device, so
+  swapping to headphones mid-call moves the recording with it. x64 only. Transcription runs
+  on the CPU unless you installed with `-Cuda`, so a long call takes a while.
 
 ## Layout
 
 ```
-bin/callrec                     the whole recorder, one bash script
-app/CallRecBar.swift            menu bar app - one file, built with swiftc, no Xcode
-audio/make-multi-output.swift   creates the Multi-Output Device via CoreAudio
-audio/setout.swift              switch the default output device from the CLI
+bin/callrec                     macOS   the whole recorder, one bash script
+app/CallRecBar.swift            macOS   menu bar app - one file, swiftc, no Xcode
+audio/make-multi-output.swift   macOS   creates the Multi-Output Device via CoreAudio
+audio/setout.swift              macOS   switch the default output device from the CLI
+
+bin/callrec.ps1                 Windows the whole recorder, one PowerShell script
+app/CallRecTray.ps1             Windows tray app - WinForms, no compiler needed
+audio/LoopbackCapture.cs        Windows WASAPI loopback + mic capture, compiled at install
 ```
 
 Longer write-up, including the CoreAudio details: https://gal.tidhar.org.il/blog/callrec/
