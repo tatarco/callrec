@@ -47,6 +47,12 @@ to it on `start` and switches back on `stop`.
 
 ### Windows
 
+> **Untested.** The Windows build was written on a Mac and has never been run on Windows. The
+> PowerShell parses clean and the C# compiles against the pinned NAudio assembly, but no audio
+> has ever been captured with it. If you're trying it, read
+> [TESTING-WINDOWS.md](TESTING-WINDOWS.md) first - it has the test plan, the ranked list of
+> where it is most likely to break, and enough context to finish the job. Findings welcome.
+
 Windows never made that decision. [WASAPI loopback](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording)
 has let any program read the audio going to a render device since Vista, so there is no
 driver to install, no fake sound card, no Multi-Output Device, and nothing about your sound
@@ -86,7 +92,7 @@ Installs ffmpeg, whisper-cpp and BlackHole via Homebrew, downloads the whisper m
 (~1.6GB, once), creates the `Call Capture` Multi-Output Device via CoreAudio, and builds the
 menu bar app into `~/Applications`. Re-running is safe.
 
-**Windows** (PowerShell, no admin rights needed)
+**Windows** (PowerShell, no admin rights needed) - [untested, see TESTING-WINDOWS.md](TESTING-WINDOWS.md)
 
 ```powershell
 git clone https://github.com/tatarco/callrec.git; cd callrec; .\install.ps1
@@ -157,6 +163,8 @@ audio/setout.swift              macOS   switch the default output device from th
 bin/callrec.ps1                 Windows the whole recorder, one PowerShell script
 app/CallRecTray.ps1             Windows tray app - WinForms, no compiler needed
 audio/LoopbackCapture.cs        Windows WASAPI loopback + mic capture, compiled at install
+
+TESTING-WINDOWS.md              what is verified, what isn't, and how to finish it
 ```
 
 Longer write-up, including the CoreAudio details: https://gal.tidhar.org.il/blog/callrec/
